@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test app server</title>
+
+  <style>
+    body {font-family: Arial, sans-serif;margin:20px;background:#f4f4f9;}
+    input[type=text]{width:100%;padding:6px 8px;margin:6px 0 12px 0;}
+    button{cursor:pointer;padding:6px 12px;border:none;border-radius:4px;background:#712f85;color:#fff;}
+    button:hover{background:#5a2269}
+    #statusLabel{margin-top:8px;font-style:italic}
+    #saveGroupsBtn{display:none;font-size:22px;padding:8px 16px;margin:12px 0;background:#ff3030}
+    #saveGroupsBtn:hover{background:#c70000}
+    #statusLabel{margin-left:8px;font-style:italic}
+    #welcome {position: fixed;inset: 0;display: flex;align-items: center;justify-content: center;background: #000;color: #fff;font-size: 1.5rem;text-align: center;user-select: none;z-index: 9999;}
+
+    /* siatka wyników */
+    .rezulty{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;margin-top:10px}
+    .group-header{grid-column:1/-1;padding:6px 4px;font-size:1.3em;font-weight:bold;color:#333}
+    .phone-group{border:3px solid #333;border-radius:5px;padding:10px;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.1)}
+    .phone-group h3{margin:0 0 8px 0;font-size:1.05em}
+    .listing{border:1px solid #e0e0e0;border-radius:5px;padding:8px;margin-top:8px;text-align:center}
+    .listing img{max-width:100%;border-radius:4px;margin-bottom:6px}
+    .listing h4{margin:6px 0 4px 0;font-size:1.05em}
+    .listing p{margin:0;font-size:.9em;color:#666}
+    .group-buttons{margin-top:6px}
+    .group-buttons button{margin:2px;font-size:.8em;background:#888}
+    .group-buttons button:hover{background:#666}
+  </style>
+</head>
+<body>
+  <div id="welcome">
+    <p>Jeśli widzisz ten napis,<br/>to znaczy, że <span id="serverSpan">serwer</span> działa</p>
+  </div>
+  <div id="mainContainer" style="visibility:hidden">
+  <h1>Scraper ogłoszeń</h1>
+  <button onclick="openGarsoLogin('btyrlsd1')">LOGIN 1</button> <!--klocuch246 tata_was_wszystkich-->      
+  <p><label for="searchUrlInput">URL wyszukiwania:</label>
+  <input id="searchUrlInput" type="text"
+         value="https://pl.escort.club/anonse/towarzyskie/bielsko-biala/?province=24&district=&filter_price_type=&filter_price=0%3B25000&filter_age=18%3B39&filter_weight=30%3B64&filter_height=100%3B220&filter_breasts=2%3B8&breasts_type=&hair_colors=&sexual_orientation=&searchlang=&zodiac_sign=&q=">
+  <a id="goToEscort"  target="_blank" rel="noopener noreferrer">ZOBACZ NA ESCORT</a>
+  </p>
+  <button id="fetchData">Pokaż ogłoszenia</button> 
+  <button id="saveGroupsBtn">ZAPISZ ZMIANY W GRUPACH</button>
+  <span id="statusLabel"></span>
+
+  <h2>Nowości</h2>
+  <div id="results-nowosci" class="rezulty"></div>
+
+  <h2>Ulubione</h2>
+  <div id="results-ulubione" class="rezulty"></div>
+
+  <h2>Takie se</h2>
+  <div id="results-takieSe" class="rezulty"></div>
+
+  <h2>Czarna lista</h2>
+  <div id="results-czarnaLista" class="rezulty"></div>
+    </div>
+  <script>
+    /* --- konfiguracja --- */
+    const apiKey   = "$2a$10$H2X4RpNcSHdXokgP9SNzO.5mY8dOswBrRsGBMJOEec3kLK6tebE1C";
+    const jsonBin  = "https://api.jsonbin.io/v3/b/6885d193ae596e708fbc6609";
+    const proxy    = "https://cors-proxy-6b22.onrender.com/";
+
+    /* --- dane w RAM --- */
+    const phoneData = { mappings:{}, groups:{} };   // id → phone,  phone → grupa
+    let cachedListings = [];                        // aktualnie pobrane elementy DOM
+
+    const statusEl = document.getElementById("statusLabel");
+
+    /* ------------ POBIERANIE Z jsonbin.io ------------ */
+    async function loadJsonBin(){
+      const r = await fetch(jsonBin+"/latest",{headers:{"X-Master-Key":apiKey}});
+      const data = await r.json();
+      Object.assign(phoneData, data.record);
+    }
+    async function saveJsonBin(){
+      await fetch(jsonBin,{
+        method:"PUT",
+        headers:{"Content-Type":"application/json","X-Master-Key":apiKey},
+        body:JSON.stringify(phoneData)
+      });
+      saveBtn.style.display="none";
+    }
+
+    /* ------------ GŁÓWNE POBRANIE OGŁOSZEŃ ------------ */
+    async function fetchListings(fullReload){
+      statusEl.textContent = "Start…";
+      if(fullReload){
+        const url = document.getElementById("searchUrlInput").value.trim();
+        statusEl.textContent = "Pobieram ogłoszenia…";
+        const html = await (await fetch(proxy+url)).text();
+        const doc  = new DOMParser().parseFromString(html,"text/html");
+        cachedListings = Array.from(doc.querySelectorAll("section.content-sec div.item-col"));
+        statusEl.textContent = `Znaleziono ${cachedListings.length} ogłoszeń – pobieram numery…`;
+        await enrichMissingPhones(cachedListings);
+      }
+
+      const groups = groupByPhone(cachedListings);
+      fillResults(groups);
+
+      /* podsumowanie */
+      const uniquePhones = new Set(
+        cachedListings
+          .map(l=>phoneData.mappings[extractId(l)])
+          .filter(Boolean)
+      ).size;
+      statusEl.textContent = `Wyświetlono ${cachedListings.length} ogłoszeń, ${uniquePhones} unikalnych numerów.`;
+      if(cachedListings.length > 95){
+        statusEl.textContent = "PRAWDOPODOBNIE WIĘCEJ STRON!!! " + statusEl.textContent;
+      }
+    }
+
+    /* ------------ UZUPEŁNIANIE BRAKUJĄCYCH NUMERÓW ------------ */
+    async function enrichMissingPhones(listings) {
+      // 1️⃣ wyliczamy, które ogłoszenia naprawdę potrzebują numeru
+      const missing = listings.filter(el => !phoneData.mappings[extractId(el)]);
+      const total   = missing.length;
+      let   done    = 0;
+      let   changed = false;
+
+      // inicjalny komunikat 0 / total
+      updateLabel();
+
+      // współdzielona kolejka i dwa równoległe „worker‑y”
+      const queue = [...missing];
+      await Promise.all(Array.from({ length: 4 }, worker));
+
+      // po wszystkim – zapis do jsonbin, jeśli coś się zmieniło
+      if (changed) await saveJsonBin();
+
+      /* ---------- helpers ---------- */
+      function updateLabel() {
+        statusEl.textContent = `Pobrano numer ${done} z ${total}`;
+      }
+
+      async function worker() {
+        while (queue.length) {
+          const el = queue.shift();
+          const id = extractId(el);
+
+          // pobieramy tylko, jeśli dalej nie ma
+          if (!phoneData.mappings[id]) {
+            const phone = await fetchPhone(id);
+            if (phone) {
+              phoneData.mappings[id] = phone;
+              changed = true;
+            }
+          }
+
+          done++;
+          updateLabel();         // aktualizacja progresu po każdym numerze
+        }
+      }
+    }
+
+    async function fetchPhone(id){
+      try{
+        const r = await fetch(proxy+"https://pl.escort.club/includes/ajax.show-phone.php",{
+          method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
+          body:`id=${id}`
+        });
+        const {phone} = await r.json();
+        return phone || null;
+      }catch(e){console.error("num err",e);return null;}
+    }
+
+    /* ------------ GRUPOWANIE ------------ */
+    function groupByPhone(listings){
+      const result = { nowosci:{}, ulubione:{}, takieSe:{}, czarnaLista:{} };
+      listings.forEach(el=>{
+        const id = extractId(el);
+        const phone = phoneData.mappings[id] || "Nieznany";
+        const grp   = phoneData.groups[phone] || "nowosci";
+        if(!result[grp][phone]) result[grp][phone]=[];
+        result[grp][phone].push(el);
+      });
+      return result;
+    }
+
+    /* ------------ WYPEŁNIANIE WYNIKÓW ------------ */
+    function fillResults(groups){
+      ["nowosci","ulubione","takieSe","czarnaLista"].forEach(name=>{
+        const cont = document.getElementById("results-"+name);
+        cont.textContent = "";                         // clear
+        const phoneGroups = groups[name];
+        const header = document.createElement("div");
+        header.className="group-header";
+        header.textContent = formatGroupName(name, Object.keys(phoneGroups).length);
+        cont.appendChild(header);
+
+        Object.entries(phoneGroups).forEach(([phone, lst])=>{
+          const box = document.createElement("div"); box.className="phone-group";
+
+          const cleaned = phone.replace("+48", "").replace(/\s+/g, "");
+          const garso   = cleaned.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1-$2-$3");
+          
+
+          box.innerHTML = `
+            <h3>${phone}</h3>
+            <div class="group-buttons">
+              <button onclick="chgGrp('${phone}','ulubione')">Ulubione</button>
+              <button onclick="chgGrp('${phone}','takieSe')">Takie se</button>
+              <button onclick="chgGrp('${phone}','czarnaLista')">Czarna lista</button>
+              <button onclick="chgGrp('${phone}','nowosci')">Nowości</button>
+              <button onclick="copyToClipboard('${garso}')">Kopiuj</button>
+              <button onclick="openGarsoSearch('${garso}')">GARSO</button>
+            </div>`;
+
+          lst.forEach(og=>box.appendChild(createListing(og)));
+          cont.appendChild(box);
+        });
+      });
+    }
+    const saveBtn  = document.getElementById("saveGroupsBtn");
+    /* ------------ POMOCNICZE ------------ */
+    function formatGroupName(key,count){
+      const n={nowosci:"Nowości",ulubione:"Ulubione",takieSe:"Takie se",czarnaLista:"Czarna lista"}[key]||key;
+      return `${n} (${count})`;
+    }
+    function extractId(el){
+      return (el.querySelector("a[href*='pl.escort.club/anons']")?.href.split("/").pop()||"\"").replace(".html","");
+    }
+    function createListing(el){
+      const t  = el.querySelector(".item-name")?.innerText.trim()||"Brak tytułu";
+      const la = el.querySelector(".item-stats")?.innerText.trim()||"Brak danych";
+      const img= el.querySelector("img")?.getAttribute("data-src")||"";
+      const a  = el.querySelector("a[href*='pl.escort.club/anons']")?.href||"#";
+      let price="Brak", weight="Brak", height="Brak", worksNow="Brak";
+      const tip = el.querySelector(".content-item__tooltip");
+      if (tip) {
+        tip.querySelectorAll(".-title").forEach(t => {
+          const txt = t.innerText.trim();
+          const val = t.querySelector(".-content")?.innerText.trim() || "";
+          if (txt.includes("Cena"))         price     = val;
+          else if (txt.includes("Waga"))    weight    = val;
+          else if (txt.includes("Wzrost"))  height    = val;
+          else if (txt.includes("Pracuje")) worksNow  = val;
+        });
+      }
+
+      const div=document.createElement("div"); div.className="listing";
+      div.innerHTML=`<img src="${img}" alt="">
+        <h4>${t}</h4><p>${la}</p>    
+        <div style="font-size:.9em;margin-bottom:4px;">
+      Cena: <strong>${price}</strong> |
+      Waga: <strong>${weight}</strong><br/>
+      Wzrost: <strong>${height}</strong> |
+      Pracuje: <strong>${worksNow}</strong>
+    </div><a href="${a}" target="_blank">Zobacz</a>`;
+      return div;
+    }
+    function copyToClipboard(txt){
+      navigator.clipboard.writeText(`"${txt}"`);
+    }
+    function chgGrp(phone,grp){
+      phoneData.groups[phone]=grp;
+      saveBtn.style.display="inline-block";
+      fillResults(groupByPhone(cachedListings));
+    }
+
+    function openGarsoLogin(account) {
+      // adres logowania
+      const url = "https://www.garsoniera.com.pl/forum/index.php?app=core&module=global&section=login&do=process";
+
+      // tworzymy element <form>
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = url;
+      form.target = "_blank";        // <-- otwórz w nowej karcie
+
+      // pomocnicza funkcja do dodawania ukrytych pól
+      const hidden = (name, value) => {
+        const inp = document.createElement("input");
+        inp.type  = "hidden";
+        inp.name  = name;
+        inp.value = value;
+        form.appendChild(inp);
+      };
+
+      /* ---- pola form‑data --------------------------------- */
+      hidden("ips_username", account);
+      hidden("ips_password", "abc123!#");
+      hidden("auth_key",     "880ea6a14ea49e853634fbdc5015a024");
+      hidden("referer",      "https://www.garsoniera.com.pl/forum/index.php");
+      /* ----------------------------------------------------- */
+
+      // dodajemy formularz do DOM‑u, wysyłamy, a potem usuwamy
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
+    }
+
+    function openGarsoSearch(garsoNumber) {
+      const url   = "https://www.garsoniera.com.pl/forum/index.php?app=core&module=search&do=search&fromMainBar=1";
+      const form  = document.createElement("form");
+      form.action = url;
+      form.method = "POST";
+      form.target = "_blank";
+
+      const inp   = document.createElement("input");
+      inp.type="hidden";
+      inp.name="search_term";
+      inp.value=`"${garsoNumber}"`;   // cudzysłowy + myślniki
+      form.appendChild(inp);
+
+      document.body.appendChild(form);
+      form.submit();
+      document.body.removeChild(form);
+    }
+
+    function updateGoToLink() {
+      document.getElementById('goToEscort').href = document.getElementById('searchUrlInput').value;
+    }
+
+
+    /* ------------ INIT ------------ */
+    document.getElementById('searchUrlInput').addEventListener('input', () => {
+      updateGoToLink();
+    });
+    fetch(proxy);
+    updateGoToLink();
+    (async()=>{await loadJsonBin();statusEl.textContent="Dane z bazy wczytane";})();
+    document.getElementById("fetchData").addEventListener("click", () => fetchListings(true));
+    saveBtn.addEventListener("click", async()=>{
+          await saveJsonBin();
+        });
+
+    (function () {
+      var mainCont = document.getElementById('mainContainer')
+      const overlay   = document.getElementById('welcome');
+      const serverSpan   = document.getElementById('serverSpan');
+      let   clickCnt  = 0;
+      let   timer     = null;          // do resetu klików
+
+      serverSpan.addEventListener('click', () => {
+        clickCnt++;
+        clearTimeout(timer);
+        timer = setTimeout(() => clickCnt = 0, 800);  // 0,8 s na 3 kliki
+
+        if (clickCnt === 3) {
+          unlockApp();
+        }
+      });
+
+      function unlockApp() {
+        mainCont.style = "visibility:visible"; // odsłoń stronę
+        overlay.remove();                         // usuń powitanie
+      }
+    })();
+
+  </script>
+</body>
+</html>
