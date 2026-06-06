@@ -297,16 +297,7 @@
 
 
     /* ------------ INIT ------------ */
-    document.getElementById('searchUrlInput').addEventListener('input', () => {
-      updateGoToLink();
-    });
-    fetch(proxy);
-    updateGoToLink();
-    (async()=>{await loadJsonBin();statusEl.textContent="Dane z bazy wczytane";})();
-    document.getElementById("fetchData").addEventListener("click", () => fetchListings(true));
-    saveBtn.addEventListener("click", async()=>{
-          await saveJsonBin();
-        });
+    
 
     (function () {
       var mainCont = document.getElementById('mainContainer')
